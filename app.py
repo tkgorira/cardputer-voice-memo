@@ -9,18 +9,19 @@ app = Flask(__name__)
 # =====================
 # パス関連
 # =====================
-BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
+BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads_raw")   # WAV保存先
 TEXT_DIR   = os.path.join(BASE_DIR, "uploads_text")  # STT結果(JSON)保存先
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 os.makedirs(TEXT_DIR, exist_ok=True)
 
 # =====================
-# Whisper 設定・ロード
+# Whisper 設定・ロード（軽量版）
 # =====================
-MODEL_SIZE = "base"     # "tiny", "base", "small" など
-DEVICE     = "cpu"      # GPUがあれば "cuda" もOK
-COMPUTE    = "int8"     # CPUなら軽めの int8 推奨
+# Render の無料 / 小さいプランでも動きやすいよう tiny + int8 + CPU にする
+MODEL_SIZE = "tiny"     # ここを base -> tiny に変更
+DEVICE     = "cpu"      # GPU があれば "cuda" も可だが Render 無料は基本 CPU 想定
+COMPUTE    = "int8"     # CPU で軽量に動かす設定
 LANGUAGE   = "ja"       # 日本語固定（自動検出したければ None）
 
 print(f"[INFO] Loading Whisper model: size={MODEL_SIZE}, device={DEVICE}, compute={COMPUTE}")
@@ -44,11 +45,14 @@ def save_wav_bytes(data: bytes) -> str:
 def transcribe_wav(path: str) -> dict:
     """faster-whisperでWAVを文字起こしして情報をまとめて返す。"""
     print("[INFO] STT start:", path)
+
+    # base から tiny にした上で、さらに VAD を一旦切って軽量化
+    # 必要になったら vad_filter=True に戻してもよい
     segments, info = model.transcribe(
         path,
         language=LANGUAGE,  # None なら自動判定
-        beam_size=1,
-        vad_filter=True,
+        beam_size=1,        # 軽め
+        vad_filter=False,   # まずは切って様子を見る
     )
 
     text = "".join(seg.text for seg in segments).strip()
@@ -73,9 +77,9 @@ def transcribe_wav(path: str) -> dict:
 def save_transcription_json(wav_path: str, stt_result: dict) -> str:
     """WAVファイル名＋STT結果をJSONにして保存しパスを返す。"""
     now = datetime.now().isoformat()
-    wav_filename = os.path.basename(wav_path)
+    wav_filename  = os.path.basename(wav_path)
     json_filename = os.path.splitext(wav_filename)[0] + ".json"
-    json_path = os.path.join(TEXT_DIR, json_filename)
+    json_path     = os.path.join(TEXT_DIR, json_filename)
 
     meta = {
         "filename": wav_filename,
@@ -149,7 +153,7 @@ def upload_audio():
         print("No data in request")
         return jsonify({"status": "error", "message": "no data"}), 400
 
-    # 1) WAV保存（今までと同じ流れ）
+    # 1) WAV保存
     try:
         wav_path = save_wav_bytes(data)
     except Exception as e:
@@ -218,7 +222,7 @@ def index():
     start_dt = parse_dt(start_date, start_time, is_end=False)
     end_dt   = parse_dt(end_date,   end_time,   is_end=True)
 
-    items = load_all_transcripts()
+    items    = load_all_transcripts()
     filtered = filter_by_range(items, start_dt, end_dt)
 
     return render_template(
@@ -235,5 +239,5 @@ def index():
 # =====================
 
 if __name__ == "__main__":
-    # Web UIもAPIも同じ 0.0.0.0:5000 で提供
+    # ローカルデバッグ用。Render ではプロセスマネージャが起動する
     app.run(host="0.0.0.0", port=5000, debug=True)
