@@ -1,10 +1,8 @@
 from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
 import os
-import json
 import io
 import zipfile
 from datetime import datetime
-from faster_whisper import WhisperModel  # pip install faster-whisper flask
 
 app = Flask(__name__)
 
@@ -13,21 +11,7 @@ app = Flask(__name__)
 # =====================
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
 UPLOAD_DIR = os.path.join(BASE_DIR, "uploads_raw")   # WAV保存先
-TEXT_DIR   = os.path.join(BASE_DIR, "uploads_text")  # STT結果(JSON)保存先
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(TEXT_DIR, exist_ok=True)
-
-# =====================
-# Whisper 設定・ロード（軽量版）
-# =====================
-MODEL_SIZE = "tiny"     # 軽量モデル
-DEVICE     = "cpu"      # Render 無料は CPU 想定
-COMPUTE    = "int8"     # CPU で軽量に動かす設定
-LANGUAGE   = "ja"       # 日本語固定（自動検出したければ None）
-
-print(f"[INFO] Loading Whisper model: size={MODEL_SIZE}, device={DEVICE}, compute={COMPUTE}")
-model = WhisperModel(MODEL_SIZE, device=DEVICE, compute_type=COMPUTE)
-print("[INFO] Whisper model loaded.")
 
 # =====================
 # ユーティリティ
@@ -43,84 +27,39 @@ def save_wav_bytes(data: bytes) -> str:
     print("Saved WAV:", save_path, "size:", len(data))
     return save_path
 
-def transcribe_wav(path: str) -> dict:
-    """faster-whisperでWAVを文字起こしして情報をまとめて返す。"""
-    print("[INFO] STT start:", path)
-
-    segments, info = model.transcribe(
-        path,
-        language=LANGUAGE,  # None なら自動判定
-        beam_size=1,        # 軽め
-        vad_filter=False,   # まずは切って様子を見る
-    )
-
-    text = "".join(seg.text for seg in segments).strip()
-
-    seg_list = []
-    for seg in segments:
-        seg_list.append({
-            "id": seg.id,
-            "start": seg.start,
-            "end": seg.end,
-            "text": seg.text,
-        })
-
-    print(f"[INFO] STT done: language={info.language}, duration={info.duration}s")
-    return {
-        "text": text,
-        "language": info.language,
-        "duration": info.duration,
-        "segments": seg_list,
-    }
-
-def save_transcription_json(wav_path: str, stt_result: dict) -> str:
-    """WAVファイル名＋STT結果をJSONにして保存しパスを返す。"""
-    now = datetime.now().isoformat()
-    wav_filename  = os.path.basename(wav_path)
-    json_filename = os.path.splitext(wav_filename)[0] + ".json"
-    json_path     = os.path.join(TEXT_DIR, json_filename)
-
-    meta = {
-        "filename": wav_filename,
-        "datetime": now,
-        "text": stt_result.get("text", ""),
-        "language": stt_result.get("language"),
-        "duration": stt_result.get("duration"),
-        "segments": stt_result.get("segments", []),
-        "source": "cardputer",
-    }
-
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
-
-    print("Saved JSON:", json_path)
-    return json_path
-
-def load_all_transcripts():
-    """uploads_text/*.json を全部読み込んでリストで返す。"""
+def load_all_records():
+    """
+    uploads_raw 内の WAV を読み込み、
+    ファイル名のタイムスタンプから datetime を作って降順ソートして返す。
+    """
     items = []
-    if not os.path.isdir(TEXT_DIR):
+    if not os.path.isdir(UPLOAD_DIR):
         return items
 
-    for name in sorted(os.listdir(TEXT_DIR)):
-        if not name.endswith(".json"):
+    for name in sorted(os.listdir(UPLOAD_DIR)):
+        if not name.endswith(".wav"):
             continue
-        path = os.path.join(TEXT_DIR, name)
+        path = os.path.join(UPLOAD_DIR, name)
+        if not os.path.isfile(path):
+            continue
+
+        # ファイル名: uploaded_YYYYMMDD_HHMMSS.wav
+        dt = None
         try:
-            with open(path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-            dt_str = data.get("datetime")
-            if dt_str:
-                try:
-                    dt = datetime.fromisoformat(dt_str)
-                except ValueError:
-                    dt = None
-            else:
-                dt = None
-            data["_dt"] = dt
-            items.append(data)
-        except Exception as e:
-            print(f"[WARN] failed to load {path}: {e}")
+            base = os.path.splitext(name)[0]  # uploaded_YYYYMMDD_HHMMSS
+            ts   = base.replace("uploaded_", "")
+            dt   = datetime.strptime(ts, "%Y%m%d_%H%M%S")
+        except Exception:
+            dt = None
+
+        items.append({
+            "filename": name,
+            "datetime": dt.isoformat() if dt else "",
+            "_dt": dt,
+            "text": "",  # 将来ローカルSTT結果を埋め込む余地
+        })
+
+    # 日時降順
     items.sort(key=lambda x: x.get("_dt") or datetime.min, reverse=True)
     return items
 
@@ -140,7 +79,7 @@ def filter_by_range(items, start_dt, end_dt):
     return result
 
 # =====================
-# API: 音声アップロード
+# API: 音声アップロード（保存のみ）
 # =====================
 
 @app.route("/upload_audio", methods=["POST"])
@@ -152,37 +91,18 @@ def upload_audio():
         print("No data in request")
         return jsonify({"status": "error", "message": "no data"}), 400
 
-    # 1) WAV保存
+    # 1) WAV保存のみ
     try:
         wav_path = save_wav_bytes(data)
     except Exception as e:
         print("Error saving wav:", e)
         return jsonify({"status": "error", "message": f"save failed: {e}"}), 500
 
-    # 2) STT実行（必要なければここをコメントアウトしてもOK）
-    try:
-        stt_result = transcribe_wav(wav_path)
-    except Exception as e:
-        print("Error in STT:", e)
-        return jsonify({"status": "error", "message": f"stt failed: {e}"}), 500
-
-    # 3) JSON保存
-    try:
-        json_path = save_transcription_json(wav_path, stt_result)
-    except Exception as e:
-        print("Error saving json:", e)
-        return jsonify({"status": "error", "message": f"json save failed: {e}"}), 500
-
-    # 4) レスポンス
-    response = {
+    # STT は行わない（サーバは軽く保つ）
+    return jsonify({
         "status": "ok",
         "filename": os.path.basename(wav_path),
-        "json": os.path.basename(json_path),
-        "text": stt_result.get("text", ""),
-        "language": stt_result.get("language"),
-        "duration": stt_result.get("duration"),
-    }
-    return jsonify(response), 200
+    }), 200
 
 # =====================
 # 音声ファイル配信（ブラウザ再生用）
@@ -221,7 +141,7 @@ def download_selected():
     )
 
 # =====================
-# Web UI: 検索画面
+# Web UI: 検索 + 再生 + 選択DL
 # =====================
 
 @app.route("/", methods=["GET", "POST"])
@@ -257,7 +177,7 @@ def index():
     start_dt = parse_dt(start_date, start_time, is_end=False)
     end_dt   = parse_dt(end_date,   end_time,   is_end=True)
 
-    items    = load_all_transcripts()
+    items    = load_all_records()
     filtered = filter_by_range(items, start_dt, end_dt)
 
     return render_template(
