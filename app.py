@@ -1,6 +1,8 @@
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, send_from_directory, send_file
 import os
 import json
+import io
+import zipfile
 from datetime import datetime
 from faster_whisper import WhisperModel  # pip install faster-whisper flask
 
@@ -18,9 +20,8 @@ os.makedirs(TEXT_DIR, exist_ok=True)
 # =====================
 # Whisper 設定・ロード（軽量版）
 # =====================
-# Render の無料 / 小さいプランでも動きやすいよう tiny + int8 + CPU にする
-MODEL_SIZE = "tiny"     # ここを base -> tiny に変更
-DEVICE     = "cpu"      # GPU があれば "cuda" も可だが Render 無料は基本 CPU 想定
+MODEL_SIZE = "tiny"     # 軽量モデル
+DEVICE     = "cpu"      # Render 無料は CPU 想定
 COMPUTE    = "int8"     # CPU で軽量に動かす設定
 LANGUAGE   = "ja"       # 日本語固定（自動検出したければ None）
 
@@ -46,8 +47,6 @@ def transcribe_wav(path: str) -> dict:
     """faster-whisperでWAVを文字起こしして情報をまとめて返す。"""
     print("[INFO] STT start:", path)
 
-    # base から tiny にした上で、さらに VAD を一旦切って軽量化
-    # 必要になったら vad_filter=True に戻してもよい
     segments, info = model.transcribe(
         path,
         language=LANGUAGE,  # None なら自動判定
@@ -160,7 +159,7 @@ def upload_audio():
         print("Error saving wav:", e)
         return jsonify({"status": "error", "message": f"save failed: {e}"}), 500
 
-    # 2) STT実行
+    # 2) STT実行（必要なければここをコメントアウトしてもOK）
     try:
         stt_result = transcribe_wav(wav_path)
     except Exception as e:
@@ -184,6 +183,42 @@ def upload_audio():
         "duration": stt_result.get("duration"),
     }
     return jsonify(response), 200
+
+# =====================
+# 音声ファイル配信（ブラウザ再生用）
+# =====================
+
+@app.route("/audio/<path:filename>")
+def serve_audio(filename):
+    """uploads_raw 内の WAV をそのまま返す。"""
+    return send_from_directory(UPLOAD_DIR, filename)
+
+# =====================
+# 選択した録音を ZIP で一括ダウンロード
+# =====================
+
+@app.route("/download_selected", methods=["POST"])
+def download_selected():
+    """チェックされた filename の WAV を ZIP にまとめて返す。"""
+    filenames = request.form.getlist("files")
+
+    if not filenames:
+        return jsonify({"status": "error", "message": "no files selected"}), 400
+
+    zip_buffer = io.BytesIO()
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in filenames:
+            path = os.path.join(UPLOAD_DIR, name)
+            if os.path.isfile(path):
+                zf.write(path, arcname=name)
+    zip_buffer.seek(0)
+
+    return send_file(
+        zip_buffer,
+        mimetype="application/zip",
+        as_attachment=True,
+        download_name="selected_recordings.zip",
+    )
 
 # =====================
 # Web UI: 検索画面

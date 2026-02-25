@@ -10,20 +10,37 @@
     .item {
       border-bottom: 1px solid #ccc;
       padding: 8px 0;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
     }
     .meta {
       font-size: 0.9em;
       color: #555;
     }
     .text {
-      margin-top: 4px;
       white-space: pre-wrap;
+      margin-top: 2px;
+    }
+    .controls {
+      margin-top: 4px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .checkbox {
+      margin-right: 8px;
+    }
+    .download-bar {
+      margin-top: 16px;
+      margin-bottom: 24px;
     }
   </style>
 </head>
 <body>
   <h1>Cardputer Voice Log</h1>
 
+  <!-- 日付・時刻 フィルタフォーム（検索） -->
   <form method="post">
     <label>
       開始日:
@@ -46,11 +63,32 @@
     <button type="submit">検索</button>
   </form>
 
-  <div>
-    {% if items %}
-      <p>ヒット件数: {{ items|length }}</p>
+  <!-- 録音一覧 + 選択DLフォーム -->
+  {% if items %}
+    <p>ヒット件数: {{ items|length }}</p>
+
+    <!-- 選択した録音を ZIP で一括ダウンロードするフォーム -->
+    <form method="post" action="/download_selected">
+      <div class="download-bar">
+        <button type="submit">選択した録音をZIPでダウンロード</button>
+      </div>
+
       {% for it in items %}
         <div class="item">
+          <div class="controls">
+            <!-- ZIP ダウンロード用チェックボックス -->
+            <input
+              class="checkbox"
+              type="checkbox"
+              name="files"
+              value="{{ it.filename }}"
+            >
+            <!-- ブラウザ内で再生するオーディオプレイヤー -->
+            <audio controls preload="none">
+              <source src="{{ url_for('serve_audio', filename=it.filename) }}" type="audio/wav">
+              お使いのブラウザは audio タグをサポートしていません。
+            </audio>
+          </div>
           <div class="meta">
             日時: {{ it.datetime }} |
             ファイル: {{ it.filename }}
@@ -60,9 +98,13 @@
           </div>
         </div>
       {% endfor %}
-    {% else %}
-      <p>該当するメモはありません。</p>
-    {% endif %}
-  </div>
+
+      <div class="download-bar">
+        <button type="submit">選択した録音をZIPでダウンロード</button>
+      </div>
+    </form>
+  {% else %}
+    <p>該当するメモはありません。</p>
+  {% endif %}
 </body>
 </html>
