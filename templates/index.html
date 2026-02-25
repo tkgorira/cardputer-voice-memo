@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <title>Cardputer Voice Log</title>
+  <style>
+    body { font-family: sans-serif; margin: 20px; }
+    form { margin-bottom: 20px; }
+    label { margin-right: 10px; }
+    .item {
+      border-bottom: 1px solid #ccc;
+      padding: 8px 0;
+    }
+    .meta {
+      font-size: 0.9em;
+      color: #555;
+    }
+    .text {
+      margin-top: 4px;
+      white-space: pre-wrap;
+    }
+  </style>
+</head>
+<body>
+  <h1>Cardputer Voice Log</h1>
+
+  <form method="post">
+    <label>
+      開始日:
+      <input type="date" name="start_date" value="{{ start_date }}">
+    </label>
+    <label>
+      開始時刻:
+      <input type="time" name="start_time" value="{{ start_time }}">
+    </label>
+    <br><br>
+    <label>
+      終了日:
+      <input type="date" name="end_date" value="{{ end_date }}">
+    </label>
+    <label>
+      終了時刻:
+      <input type="time" name="end_time" value="{{ end_time }}">
+    </label>
+    <br><br>
+    <button type="submit">検索</button>
+  </form>
+
+  <div>
+    {% if items %}
+      <p>ヒット件数: {{ items|length }}</p>
+      {% for it in items %}
+        <div class="item">
+          <div class="meta">
+            日時: {{ it.datetime }} |
+            ファイル: {{ it.filename }}
+          </div>
+          <div class="text">
+            {{ it.text }}
+          </div>
+        </div>
+      {% endfor %}
+    {% else %}
+      <p>該当するメモはありません。</p>
+    {% endif %}
+  </div>
+</body>
+</html>

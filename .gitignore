@@ -1,0 +1,6 @@
+venv/
+uploads_raw/
+uploads_text/
+__pycache__/
+*.pyc
+.env
